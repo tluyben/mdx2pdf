@@ -1,0 +1,17 @@
+<svg viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg">
+  <!-- Frontend -->
+  <rect x="50" y="50" width="100" height="60" rx="5" fill="#4CAF50" />
+  <text x="100" y="85" text-anchor="middle" fill="white">Frontend</text>
+  
+  <!-- API -->
+  <rect x="150" y="150" width="100" height="60" rx="5" fill="#2196F3" />
+  <text x="200" y="185" text-anchor="middle" fill="white">API</text>
+  
+  <!-- Database -->
+  <rect x="250" y="250" width="100" height="60" rx="5" fill="#9C27B0" />
+  <text x="300" y="285" text-anchor="middle" fill="white">Database</text>
+  
+  <!-- Connecting Lines -->
+  <line x1="100" y1="110" x2="150" y2="150" stroke="black" stroke-width="2"/>
+  <line x1="200" y1="210" x2="250" y2="250" stroke="black" stroke-width="2"/>
+</svg>
