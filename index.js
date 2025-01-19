@@ -73,7 +73,7 @@ async function getMdxFiles(dir, fileList = [], prefix = "") {
 
     if (item.isDirectory()) {
       await getMdxFiles(path, fileList, `${prefix}${item.name}/`);
-    } else if (item.name.endsWith(".mdx")) {
+    } else if (item.name.endsWith(".mdx") || item.name.endsWith(".md")) {
       fileList.push({
         path,
         menuPath: `${prefix}${parse(item.name).name}`,
