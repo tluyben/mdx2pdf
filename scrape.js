@@ -7,12 +7,13 @@ async function generatePDF(startUrl) {
   console.log(`Starting PDF generation from: ${startUrl}`);
 
   const browser = await playwright.chromium.launch();
-  const page = await browser.newPage();
-
-  await page.setViewportSize({
-    width: 1200,
-    height: 800,
+  const context = await browser.newContext({
+    viewport: { width: 1540, height: 1024 },
+    deviceScaleFactor: 1,
+    isMobile: false,
+    hasTouch: false
   });
+  const page = await context.newPage();
 
   // Get base URL for filtering
   const baseUrl = new URL(startUrl).origin;
@@ -25,15 +26,14 @@ async function generatePDF(startUrl) {
 
   console.log("Collecting doc links...");
   const links = await page.evaluate((basePath) => {
-    return Array.from(document.querySelectorAll("a"))
-      .map(link => ({
-        href: link.href,
-        hash: link.hash
-      }));
+    return Array.from(document.querySelectorAll("a")).map((link) => ({
+      href: link.href,
+      hash: link.hash,
+    }));
   }, baseUrl + docsPath);
 
   // Remove duplicates and filter relevant links
-  const uniqueLinks = [...new Set(links.map(l => l.href))].filter(
+  const uniqueLinks = [...new Set(links.map((l) => l.href))].filter(
     (link) => link.startsWith(baseUrl) && link.includes(docsPath)
   );
 
@@ -49,38 +49,61 @@ async function generatePDF(startUrl) {
   for (const [index, link] of uniqueLinks.entries()) {
     console.log(`Processing page ${index + 1}/${uniqueLinks.length}: ${link}`);
     await page.goto(link, { waitUntil: "networkidle0" });
-    
+
     // Process page content to update internal links
-    const processedContent = await page.evaluate((pageData) => {
-      // Add an ID to the main content
-      const mainContent = document.querySelector('main') || document.body;
-      mainContent.id = `page-${pageData.index}`;
-      
-      // Update all internal links
-      document.querySelectorAll('a').forEach(link => {
-        if (link.href.startsWith(pageData.baseUrl)) {
-          // If it's an internal link
-          const url = new URL(link.href);
-          if (url.hash) {
-            // If it has a hash, keep it as is - it will work in PDF
-            link.href = url.hash;
-          } else {
-            // If it's a page link, point to the page ID
-            const targetIndex = pageData.pageIndexMap[link.href];
-            if (targetIndex !== undefined) {
-              link.href = `#page-${targetIndex}`;
+    const processedContent = await page.evaluate(
+      (pageData) => {
+        // First fix layout issues
+        const style = document.createElement('style');
+        style.textContent = `
+          * {
+            position: static !important;
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+          }
+          nav, header, [role="banner"] {
+            display: none !important;
+          }
+          main, [role="main"], article, .content {
+            margin: 0 !important;
+            padding: 1em !important;
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+        `;
+        document.head.appendChild(style);
+  
+        // Add an ID to the main content
+        const mainContent = document.querySelector("main") || document.body;
+        mainContent.id = `page-${pageData.index}`;
+  
+        // Update all internal links
+        document.querySelectorAll("a").forEach((link) => {
+          if (link.href.startsWith(pageData.baseUrl)) {
+            // If it's an internal link
+            const url = new URL(link.href);
+            if (url.hash) {
+              // If it has a hash, keep it as is - it will work in PDF
+              link.href = url.hash;
+            } else {
+              // If it's a page link, point to the page ID
+              const targetIndex = pageData.pageIndexMap[link.href];
+              if (targetIndex !== undefined) {
+                link.href = `#page-${targetIndex}`;
+              }
             }
           }
-        }
-      });
-      
-      return document.documentElement.outerHTML;
-    }, {
-      index,
-      baseUrl,
-      pageIndexMap: Object.fromEntries([...pageIndexMap.entries()])
-    });
-    
+        });
+
+        return document.documentElement.outerHTML;
+      },
+      {
+        index,
+        baseUrl,
+        pageIndexMap: Object.fromEntries([...pageIndexMap.entries()]),
+      }
+    );
+
     pages.push(processedContent);
   }
 
@@ -90,11 +113,39 @@ async function generatePDF(startUrl) {
     <html>
       <head>
         <style>
-          body { font-family: Arial, sans-serif; }
-          .page-break { page-break-after: always; }
-          img { max-width: 100%; height: auto; }
+          * {
+            position: static !important;
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+          }
+          body {
+            font-family: Arial, sans-serif;
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100%;
+          }
+          .page-break {
+            page-break-after: always;
+            margin: 2em 0;
+          }
+          img {
+            max-width: 100%;
+            height: auto;
+          }
+          nav, header, [role="banner"] {
+            display: none !important;
+          }
+          main, [role="main"], article, .content {
+            margin: 0 !important;
+            padding: 1em !important;
+            width: 100% !important;
+            max-width: 100% !important;
+          }
           /* Ensure page IDs don't affect layout */
-          [id^="page-"] { margin: 0; padding: 0; }
+          [id^="page-"] {
+            margin: 0;
+            padding: 0;
+          }
         </style>
       </head>
       <body>
