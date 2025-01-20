@@ -24,16 +24,24 @@ async function generatePDF(startUrl) {
   });
 
   console.log("Collecting doc links...");
-  const links = await page.evaluate(() => {
+  const links = await page.evaluate((basePath) => {
     return Array.from(document.querySelectorAll("a"))
-      .map((link) => link.href)
-      .filter((href) => href.includes("/docs/") && !href.includes("#"));
-  });
+      .map(link => ({
+        href: link.href,
+        hash: link.hash
+      }));
+  }, baseUrl + docsPath);
 
-  // Remove duplicates
-  const uniqueLinks = [...new Set(links)].filter(
+  // Remove duplicates and filter relevant links
+  const uniqueLinks = [...new Set(links.map(l => l.href))].filter(
     (link) => link.startsWith(baseUrl) && link.includes(docsPath)
   );
+
+  // Create a mapping of URLs to their position in the document
+  const pageIndexMap = new Map();
+  uniqueLinks.forEach((link, index) => {
+    pageIndexMap.set(link, index);
+  });
 
   console.log(`Found ${uniqueLinks.length} unique documentation pages`);
   const pages = [await page.content()];
@@ -41,7 +49,39 @@ async function generatePDF(startUrl) {
   for (const [index, link] of uniqueLinks.entries()) {
     console.log(`Processing page ${index + 1}/${uniqueLinks.length}: ${link}`);
     await page.goto(link, { waitUntil: "networkidle0" });
-    pages.push(await page.content());
+    
+    // Process page content to update internal links
+    const processedContent = await page.evaluate((pageData) => {
+      // Add an ID to the main content
+      const mainContent = document.querySelector('main') || document.body;
+      mainContent.id = `page-${pageData.index}`;
+      
+      // Update all internal links
+      document.querySelectorAll('a').forEach(link => {
+        if (link.href.startsWith(pageData.baseUrl)) {
+          // If it's an internal link
+          const url = new URL(link.href);
+          if (url.hash) {
+            // If it has a hash, keep it as is - it will work in PDF
+            link.href = url.hash;
+          } else {
+            // If it's a page link, point to the page ID
+            const targetIndex = pageData.pageIndexMap[link.href];
+            if (targetIndex !== undefined) {
+              link.href = `#page-${targetIndex}`;
+            }
+          }
+        }
+      });
+      
+      return document.documentElement.outerHTML;
+    }, {
+      index,
+      baseUrl,
+      pageIndexMap: Object.fromEntries([...pageIndexMap.entries()])
+    });
+    
+    pages.push(processedContent);
   }
 
   console.log("Combining content...");
@@ -53,21 +93,27 @@ async function generatePDF(startUrl) {
           body { font-family: Arial, sans-serif; }
           .page-break { page-break-after: always; }
           img { max-width: 100%; height: auto; }
+          /* Ensure page IDs don't affect layout */
+          [id^="page-"] { margin: 0; padding: 0; }
         </style>
       </head>
       <body>
-        ${pages.map((content, index) => `
+        ${pages
+          .map(
+            (content, index) => `
           <div class="page-content">
             ${content}
-            ${index < pages.length - 1 ? '<div class="page-break"></div>' : ''}
+            ${index < pages.length - 1 ? '<div class="page-break"></div>' : ""}
           </div>
-        `).join('')}
+        `
+          )
+          .join("")}
       </body>
     </html>
   `;
 
   console.log("Setting combined content...");
-  await page.setContent(combinedHtml, { waitUntil: 'networkidle0' });
+  await page.setContent(combinedHtml, { waitUntil: "networkidle0" });
 
   console.log("Generating PDF...");
   await page.pdf({
