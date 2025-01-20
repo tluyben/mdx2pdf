@@ -2,6 +2,19 @@
 
 Convert your MDX documentation into beautiful PDFs with automatic table of contents based on directory structure!
 
+## ⚠️ WARNING
+
+This was just a quicky to convert basic mdx/md documents, it does not work for more advanced files as those tend to require a full build/bundling with Astro/React etc. To convert those to PDF, just use something like this:
+
+```
+npx playwright install
+node scrape.js <url>
+
+example:
+
+node scrape.js https://dusa.rocks/docs/
+```
+
 ## 🚀 Features
 
 - 📁 Recursively processes entire directory structures

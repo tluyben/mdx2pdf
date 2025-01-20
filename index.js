@@ -1,277 +1,137 @@
-import { readFile, readdir, access } from "fs/promises";
-import { join, parse, dirname, resolve } from "path";
-import { evaluate } from "@mdx-js/mdx";
-import * as runtime from "react/jsx-runtime";
-import { createElement } from "react";
-import { renderToString } from "react-dom/server";
+#!/usr/bin/env node
+import fs from "fs/promises";
+import path from "path";
+import { createProcessor } from "@mdx-js/mdx";
 import puppeteer from "puppeteer";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
+import glob from "glob-promise";
 
-// Check if file exists
-async function fileExists(path) {
+async function getMDXContent(sourceDir, filePath) {
+  const source = await fs.readFile(path.join(sourceDir, filePath), "utf-8");
+
   try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Function to handle image paths
-async function processImagePaths(content, mdxFilePath) {
-  const mdxDir = dirname(mdxFilePath);
-
-  // Find all image references in markdown/HTML
-  const imageRegex = /!\[.*?\]\((.*?)\)|<img.*?src=["'](.*?)["']/g;
-  let match;
-  let processedContent = content;
-  let warnings = [];
-
-  while ((match = imageRegex.exec(content)) !== null) {
-    const imgPath = match[1] || match[2];
-    if (!imgPath.startsWith("http")) {
-      const absoluteImgPath = resolve(mdxDir, imgPath);
-      const exists = await fileExists(absoluteImgPath);
-
-      if (!exists) {
-        warnings.push(
-          `Warning: Image file not found: ${imgPath} in ${mdxFilePath}`
-        );
-      } else {
-        // Convert image to data URL for PDF
-        try {
-          const imgData = await readFile(absoluteImgPath);
-          const base64 = imgData.toString("base64");
-          const mimeType = imgPath.endsWith(".svg")
-            ? "image/svg+xml"
-            : imgPath.endsWith(".png")
-            ? "image/png"
-            : "image/jpeg";
-          const dataUrl = `data:${mimeType};base64,${base64}`;
-
-          // Replace the original path with data URL
-          processedContent = processedContent.replace(imgPath, dataUrl);
-        } catch (error) {
-          warnings.push(
-            `Warning: Failed to process image ${imgPath} in ${mdxFilePath}: ${error.message}`
-          );
-        }
-      }
-    }
-  }
-
-  return { processedContent, warnings };
-}
-
-// Function to recursively get all MDX files in directory
-async function getMdxFiles(dir, fileList = [], prefix = "") {
-  const items = await readdir(dir, { withFileTypes: true });
-
-  for (const item of items) {
-    const path = join(dir, item.name);
-
-    if (item.isDirectory()) {
-      await getMdxFiles(path, fileList, `${prefix}${item.name}/`);
-    } else if (item.name.endsWith(".mdx") || item.name.endsWith(".md")) {
-      fileList.push({
-        path,
-        menuPath: `${prefix}${parse(item.name).name}`,
-      });
-    }
-  }
-
-  return fileList;
-}
-
-// Convert MDX to HTML
-async function mdxToHtml(mdxContent, filePath) {
-  try {
-    // Process image paths first
-    const { processedContent, warnings } = await processImagePaths(
-      mdxContent,
-      filePath
-    );
-
-    const { default: Content } = await evaluate(processedContent, {
-      ...runtime,
-      remarkPlugins: [remarkGfm],
-      rehypePlugins: [rehypeHighlight],
+    // Create MDX processor with minimal transformations
+    const processor = await createProcessor({
+      jsx: true,
+      remarkPlugins: [],
+      rehypePlugins: [],
     });
 
-    // Create the React element
-    const element = createElement(Content);
+    // Process MDX to JSX
+    const result = await processor.process(source);
 
-    // Render to HTML string
-    return { html: renderToString(element), warnings };
+    return {
+      raw: source,
+      jsx: String(result),
+    };
   } catch (error) {
-    throw new Error(`Error processing ${filePath}: ${error.message}`);
+    console.error(`Error processing ${filePath}:`, error);
+    return { raw: "", jsx: "" };
   }
 }
 
-// Convert HTML to PDF
-async function htmlToPdf(html, outputPath) {
+async function convertDirectoryToPdf(sourceDir) {
+  const mdxFiles = await glob("**/*.mdx", { cwd: sourceDir });
+  mdxFiles.sort();
+
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
 
-  const fullHtml = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
-        <style>
-          body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.6;
-            padding: 2rem;
-            max-width: 800px;
-            margin: 0 auto;
-          }
-          pre {
-            background: #f6f8fa;
-            padding: 1rem;
-            border-radius: 4px;
-            overflow-x: auto;
-          }
-          code {
-            font-family: "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
-          }
-          img {
-            max-width: 100%;
-            height: auto;
-          }
-          .toc-item {
-            margin: 8px 0;
-          }
-          h1, h2, h3, h4, h5, h6 {
-            margin-top: 2rem;
-            margin-bottom: 1rem;
-          }
-          hr {
-            margin: 2rem 0;
-            border: none;
-            border-top: 1px solid #e1e4e8;
-          }
-        </style>
-      </head>
-      <body>
-        ${html}
-      </body>
-    </html>
-  `;
-
-  await page.setContent(fullHtml, {
-    waitUntil: "networkidle0",
+  await page.addStyleTag({
+    content: `
+      body {
+        font-family: 'SF Mono', Menlo, monospace;
+        line-height: 1.6;
+        padding: 20px;
+        font-size: 14px;
+      }
+      .mdx-content {
+        white-space: pre-wrap;
+        background: #f8f8f8;
+        padding: 20px;
+        border-radius: 5px;
+        border: 1px solid #ddd;
+      }
+      .file-path {
+        color: #666;
+        font-size: 0.9em;
+        margin-bottom: 10px;
+      }
+      h1 { 
+        page-break-before: always;
+        font-size: 24px;
+        margin-bottom: 20px;
+      }
+      code {
+        background: #f0f0f0;
+        padding: 2px 4px;
+        border-radius: 3px;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 15px;
+        border-radius: 5px;
+      }
+    `,
   });
 
+  let combinedHtml = '<div id="content">';
+
+  for (const mdxPath of mdxFiles) {
+    try {
+      console.log(`Processing ${mdxPath}...`);
+      const { raw } = await getMDXContent(sourceDir, mdxPath);
+
+      combinedHtml += `
+        <h1>${mdxPath}</h1>
+        <div class="file-path">Path: ${mdxPath}</div>
+        <div class="mdx-content">${raw
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</div>
+      `;
+    } catch (error) {
+      console.error(`Error processing ${mdxPath}:`, error);
+    }
+  }
+
+  combinedHtml += "</div>";
+
+  await page.setContent(combinedHtml);
+  await page.waitForSelector("#content");
+
   await page.pdf({
-    path: outputPath,
+    path: "output.pdf",
     format: "A4",
     printBackground: true,
     margin: {
-      top: "2cm",
-      bottom: "2cm",
-      left: "2cm",
-      right: "2cm",
+      top: "20mm",
+      right: "20mm",
+      bottom: "20mm",
+      left: "20mm",
     },
   });
 
+  console.log("Generated output.pdf");
   await browser.close();
 }
 
-// Generate table of contents
-function generateToc(files) {
-  return `
-    <h1>Table of Contents</h1>
-    <nav>
-      ${files
-        .map(
-          (file) => `
-        <div class="toc-item" style="padding-left: ${
-          (file.menuPath.match(/\//g) || []).length * 20
-        }px">
-          <a href="#${file.menuPath}">${file.menuPath}</a>
-        </div>
-      `
-        )
-        .join("")}
-    </nav>
-    <hr>
-  `;
+const rootPath = process.argv[2];
+
+if (!rootPath) {
+  console.error("Please provide a root path");
+  process.exit(1);
 }
 
-// Main function
-async function convertMdxToPdf(inputDir) {
-  try {
-    console.log("Finding MDX files...");
-    const files = await getMdxFiles(inputDir);
+const absolutePath = path.resolve(rootPath);
 
-    if (files.length === 0) {
-      console.error("No MDX files found in directory");
-      process.exit(1);
-    }
-
-    console.log(`Found ${files.length} MDX files`);
-
-    // Create TOC
-    const toc = generateToc(files);
-    let sections = [];
-    let allWarnings = [];
-    let failedFiles = [];
-
-    // Convert each MDX file
-    console.log("Converting MDX files to HTML...");
-    for (const file of files) {
-      try {
-        const mdxContent = await readFile(file.path, "utf-8");
-        const { html, warnings } = await mdxToHtml(mdxContent, file.path);
-
-        sections.push(`
-          <section id="${file.menuPath}">
-            <h2>${file.menuPath}</h2>
-            ${html}
-          </section>
-          <hr>
-        `);
-
-        if (warnings.length > 0) {
-          allWarnings.push(...warnings);
-        }
-      } catch (error) {
-        console.error(`\n${error.message}`);
-        failedFiles.push(file.path);
-        // Continue with other files instead of throwing
-      }
-    }
-
-    if (allWarnings.length > 0) {
-      console.log("\nWarnings:");
-      allWarnings.forEach((warning) => console.log(warning));
-    }
-
-    if (failedFiles.length > 0) {
-      console.log("\nFailed to process these files:");
-      failedFiles.forEach((file) => console.log(` - ${file}`));
-
-      if (failedFiles.length === files.length) {
-        console.error("All files failed to process. Exiting.");
-        process.exit(1);
-      }
-
-      console.log("\nContinuing with successfully processed files...");
-    }
-
-    const fullHtml = toc + sections.join("\n");
-
-    console.log("\nGenerating PDF...");
-    await htmlToPdf(fullHtml, "output.pdf");
-    console.log("PDF generated successfully: output.pdf");
-  } catch (error) {
-    console.error("Error:", error);
-    process.exit(1);
-  }
+try {
+  await fs.access(absolutePath);
+} catch {
+  console.error("Provided path does not exist");
+  process.exit(1);
 }
 
-// CLI handling
-const inputDir = process.argv[2] || ".";
-convertMdxToPdf(inputDir);
+console.log(`Processing MDX files in ${absolutePath}...`);
+convertDirectoryToPdf(absolutePath).catch((error) => {
+  console.error("Error:", error);
+  process.exit(1);
+});
